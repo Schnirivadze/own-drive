@@ -1,0 +1,11 @@
+@font-face {
+	font-family: 'IBM Plex Mono';
+	src: url(./fonts/IBMPlexMono-Regular.ttf);
+}
+
+body {
+	margin: 0;
+	font-family: 'IBM Plex Mono';
+	-webkit-font-smoothing: antialiased;
+	-moz-osx-font-smoothing: grayscale;
+}
