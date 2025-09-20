@@ -1,0 +1,1 @@
+DELETE FROM tokens WHERE expires_at < CURRENT_TIMESTAMP;
