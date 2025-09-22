@@ -3,7 +3,6 @@ package main
 import (
 	"database/sql"
 	"log"
-	"time"
 )
 
 func getUserIdByLogin(db *sql.DB, username, password string) (int, error) {
@@ -12,62 +11,85 @@ func getUserIdByLogin(db *sql.DB, username, password string) (int, error) {
 	return userId, err
 }
 
-func createUser(db *sql.DB, username, password string, quotaBytes int64) error {
-	result, err := db.Exec(`INSERT INTO users (username, password_hash, quota_bytes) VALUES (?, ?, ?)`, username, password, quotaBytes)
-	log.Printf("CreateUser result: %v\n", result)
+func createUser(db *sql.DB, inviteToken string, username, password string) error {
+	// Authenticate invite token
+	var validToken bool
+	errToken := db.QueryRow("SELECT EXISTS(SELECT 1 FROM invite_tokens WHERE token=?)", inviteToken).Scan(&validToken)
+	if errToken != nil {
+		log.Println("Error authenticating invite token")
+		return errToken
+	}
+	if !validToken {
+		log.Println("Invalid invite token")
+		return sql.ErrNoRows
+	}
+
+	// Create user
+	_, errCreateUser := db.Exec(`INSERT INTO users (username, password, quota_bytes) VALUES (?, ?, ?)`, username, password, DefaultQuotaBytes)
+	if errCreateUser != nil {
+		log.Println("Couldnt create user")
+		return errCreateUser
+	}
+
+	// Remove invite token
+	err := deleteInviteToken(db, inviteToken)
 	return err
 }
 
-func createToken(db *sql.DB, userId int) (string, string, error) {
-	var token string = ""
-	var err error
-	for {
-		// generate token
-		token, err = generateRawToken()
-		if err != nil {
-			return "", "", err
-		}
-
-		// check if token already exists
-		var tempUserId int
-		err1 := db.QueryRow("SELECT user_id FROM tokens WHERE token=?", token).Scan(&tempUserId)
-		if err1 != sql.ErrNoRows {
-			log.Printf("The token %s already exists\n", token)
-			continue
-		}
-
-		// check if user already has a token
-		var tempToken string
-		var tempExpiryDate time.Time
-		err2 := db.QueryRow("SELECT token, expires_at FROM tokens WHERE user_id = ?", userId).Scan(&tempToken, &tempExpiryDate)
-		if  err2 == nil {
-			// compare expiryDate with current time
-			if time.Now().After(tempExpiryDate) {
-				_, delErr := db.Exec("DELETE FROM tokens WHERE user_id = ?", userId)
-				if delErr != nil {
-					// create new token after deletion
-					break
-				}
-			}
-
-			// return token that user has and which isnt exired
-			log.Printf("The user#%d already has a token: %s\n", userId, tempToken)
-			return tempToken, tempExpiryDate.String(), nil
-
-		}
-
-		// break the loop if token is unique and user doesnt have any
-		break
+func deleteUser(db *sql.DB, authToken string) error {
+	// Authenticate auth token
+	var userId int
+	errAuth := db.QueryRow("SELECT user_id FROM auth_tokens WHERE token=?", authToken).Scan(&userId)
+	if errAuth != nil {
+		log.Println("Invalid auth token")
+		return errAuth
 	}
 
-	// set expiry date
-	expiresAt := time.Now().Add(6 * time.Hour).UTC()
+	// Delete user
+	_, err := db.Exec(`DELETE FROM users WHERE id=?`, userId)
+	return err
+}
 
-	// inster token in db
-	_, err = db.Exec(`INSERT INTO tokens (token, user_id, expires_at) VALUES (?, ?, ?)`, token, userId, expiresAt)
-	if err != nil {
-		return "", "", err
+func updateUser(db *sql.DB, authToken, username, password string) error {
+	// Authenticate auth token
+	var userId int
+	errAuth := db.QueryRow("SELECT user_id FROM auth_tokens WHERE token=?", authToken).Scan(&userId)
+	if errAuth != nil {
+		log.Println("Invalid auth token")
+		return errAuth
 	}
 
-	return token, expiresAt.String(), nil
+	// Update username
+	var oldUsername string
+	errUsername := db.QueryRow("SELECT username FROM users WHERE id=?", userId).Scan(&oldUsername)
+	if errUsername != nil {
+		log.Println("Couldnt get old username")
+		return errUsername
+	}
+	if username != oldUsername {
+		_, errUpdUsername := db.Exec(`UPDATE users SET username = ? WHERE id = ?`, username, userId)
+		if errUpdUsername != nil {
+			log.Println("Couldnt update username")
+			return errUpdUsername
+		}
+	}
+
+	// Update password
+	var oldPassword string
+	errPassword := db.QueryRow("SELECT password FROM users WHERE id=?", userId).Scan(&oldPassword)
+	if errPassword != nil {
+		log.Println("Couldnt get old password")
+		return errPassword
+	}
+	if password != oldPassword {
+		_, errUpdPassword := db.Exec(`UPDATE users SET password = ? WHERE id = ?`, password, userId)
+		if errUpdPassword != nil {
+			log.Println("Couldnt update password")
+			return errUpdPassword
+		}
+	}
+
+	// Deauth user
+	err := deleteAuthToken(db, authToken)
+	return err
 }
