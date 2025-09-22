@@ -20,6 +20,13 @@ type InviteToken struct {
 }
 
 func handleAuth(w http.ResponseWriter, r *http.Request) {
+	// Clean db from expired or invalid tokens
+	err0 := runSqlFromFile(DB,"./migrations/clearTokens.sql")
+	if err0 != nil {
+		log.Println("Couldnt clear tokens")
+	}
+
+	// Get login data
 	var login LoginReq
 	if err := json.NewDecoder(r.Body).Decode(&login); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
@@ -98,6 +105,12 @@ func handleAdmin(w http.ResponseWriter, r *http.Request) {
 	action := r.URL.Query().Get("action")
 	switch action {
 	case "create-invite-token":
+		// Clean db from expired or invalid tokens
+		err0 := runSqlFromFile(DB,"./migrations/clearTokens.sql")
+		if err0 != nil {
+			log.Println("Couldnt clear tokens")
+		}
+
 		// get admin token
 		adminToken := r.Header.Get("Authorization")
 
