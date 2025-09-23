@@ -21,9 +21,9 @@ type InviteToken struct {
 
 func handleAuth(w http.ResponseWriter, r *http.Request) {
 	// Clean db from expired or invalid tokens
-	err0 := runSqlFromFile(DB,"./migrations/clearTokens.sql")
+	err0 := runSqlFromFile(DB, "./migrations/clearTokens.sql")
 	if err0 != nil {
-		log.Println("Couldnt clear tokens")
+		log.Printf("Couldnt clear tokens: %s", err0.Error())
 	}
 
 	// Get login data
@@ -84,7 +84,7 @@ func handleUser(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// verify invite token and update user
-		err := updateUser(DB, r.Header.Get("Authorization"),newLogin.Username, newLogin.Password)
+		err := updateUser(DB, r.Header.Get("Authorization"), newLogin.Username, newLogin.Password)
 		if err != nil {
 			log.Printf("Couldnt update user: %s", err.Error())
 		}
@@ -106,9 +106,9 @@ func handleAdmin(w http.ResponseWriter, r *http.Request) {
 	switch action {
 	case "create-invite-token":
 		// Clean db from expired or invalid tokens
-		err0 := runSqlFromFile(DB,"./migrations/clearTokens.sql")
+		err0 := runSqlFromFile(DB, "./migrations/clearTokens.sql")
 		if err0 != nil {
-			log.Println("Couldnt clear tokens")
+			log.Printf("Couldnt clear tokens: %s", err0.Error())
 		}
 
 		// get admin token
@@ -145,6 +145,16 @@ func handleAdmin(w http.ResponseWriter, r *http.Request) {
 
 	default:
 		log.Printf("Admin handler unknown action: %s\n", action)
+		w.WriteHeader(http.StatusBadRequest)
+	}
+}
+
+func handleFile(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodPost:
+		uploadFile(DB, w, r)
+	default:
+		log.Printf("File handler unknown method: %s\n", r.Method)
 		w.WriteHeader(http.StatusBadRequest)
 	}
 }

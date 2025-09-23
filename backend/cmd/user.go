@@ -25,10 +25,21 @@ func createUser(db *sql.DB, inviteToken string, username, password string) error
 	}
 
 	// Create user
-	_, errCreateUser := db.Exec(`INSERT INTO users (username, password, quota_bytes) VALUES (?, ?, ?)`, username, password, DefaultQuotaBytes)
+	result, errCreateUser := db.Exec(`INSERT INTO users (username, password, quota_bytes) VALUES (?, ?, ?)`, username, password, DefaultQuotaBytes)
 	if errCreateUser != nil {
 		log.Println("Couldnt create user")
 		return errCreateUser
+	}
+	userId, errGetId := result.LastInsertId()
+	if errGetId != nil {
+		log.Println("Couldnt get users id")
+		return errGetId
+	}
+
+	// Create root folder
+	if _, errCreateFolder := db.Exec(`INSERT INTO folders (owner_id, name) values (?, ?)`, userId, "~"); errCreateFolder!=nil{
+		log.Println("Couldnt create users root folder")
+		return errCreateFolder
 	}
 
 	// Remove invite token

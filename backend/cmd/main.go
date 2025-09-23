@@ -8,7 +8,7 @@ import (
 
 const (
     DBPath     				= "./data/drive.db"
-    FilesDir   				= "./files"
+    StorageRoot   				= "./files"
     DefaultQuotaBytes   	= 25 * 1000 * 1000 * 1000
 	InviteTokenValidHours 	= 24
 	AuthTokenValidHours 	= 6
@@ -32,7 +32,7 @@ func main() {
 	http.HandleFunc("/api/auth",handleAuth)
 	http.HandleFunc("/api/user",handleUser)
 	http.HandleFunc("/api/admin",handleAdmin)
-
+	http.HandleFunc("/api/file",handleFile)
 
 	log.Println("Server is up")
 	log.Fatal((http.ListenAndServe(":8000", nil)))
