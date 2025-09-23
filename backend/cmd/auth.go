@@ -121,3 +121,9 @@ func authenticateAdmin(db *sql.DB, authToken string) (bool, error) {
 
 	return userRole == "admin", nil
 }
+
+func authenticateUser(db *sql.DB, authToken string) (int, error) {
+	var userId int
+	err := db.QueryRow(`SELECT user_id FROM auth_tokens WHERE token = ?`, authToken).Scan(&userId)
+	return userId, err
+}

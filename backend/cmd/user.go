@@ -38,8 +38,7 @@ func createUser(db *sql.DB, inviteToken string, username, password string) error
 
 func deleteUser(db *sql.DB, authToken string) error {
 	// Authenticate auth token
-	var userId int
-	errAuth := db.QueryRow("SELECT user_id FROM auth_tokens WHERE token=?", authToken).Scan(&userId)
+	userId, errAuth := authenticateUser(db, authToken)
 	if errAuth != nil {
 		log.Println("Invalid auth token")
 		return errAuth
@@ -52,8 +51,7 @@ func deleteUser(db *sql.DB, authToken string) error {
 
 func updateUser(db *sql.DB, authToken, username, password string) error {
 	// Authenticate auth token
-	var userId int
-	errAuth := db.QueryRow("SELECT user_id FROM auth_tokens WHERE token=?", authToken).Scan(&userId)
+	userId, errAuth := authenticateUser(db, authToken)
 	if errAuth != nil {
 		log.Println("Invalid auth token")
 		return errAuth
