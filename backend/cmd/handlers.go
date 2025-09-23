@@ -19,6 +19,23 @@ type InviteToken struct {
 	Token string `json:"token"`
 }
 
+func corsMiddleware(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        w.Header().Set("Access-Control-Allow-Origin", "http://localhost:3000")
+        w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+        w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Upload-Offset")
+        w.Header().Set("Access-Control-Allow-Credentials", "true")
+
+        // Preflight request
+        if r.Method == "OPTIONS" {
+            w.WriteHeader(http.StatusOK)
+            return
+        }
+
+        next.ServeHTTP(w, r)
+    })
+}
+
 func handleAuth(w http.ResponseWriter, r *http.Request) {
 	// Clean db from expired or invalid tokens
 	err0 := runSqlFromFile(DB, "./migrations/clearTokens.sql")
@@ -149,12 +166,24 @@ func handleAdmin(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func handleFile(w http.ResponseWriter, r *http.Request) {
+func handleFileUpload(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPost:
-		uploadFile(DB, w, r)
+		switch r.URL.Query().Get("action"){
+		case "single":
+			uploadFile(DB, w, r)
+		case "start":
+			startUpload(DB, w, r)
+		case "finish":
+			finishUpload(DB, w, r)
+		default:
+			log.Printf("File upload handler unknown action: %s\n", r.Method)
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	case http.MethodPut:
+		uploadChunk(DB,w,r)
 	default:
-		log.Printf("File handler unknown method: %s\n", r.Method)
+		log.Printf("File upload handler unknown method: %s\n", r.Method)
 		w.WriteHeader(http.StatusBadRequest)
 	}
 }

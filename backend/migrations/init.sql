@@ -49,9 +49,16 @@ CREATE TABLE IF NOT EXISTS files (
   deleted_at DATETIME NULL
 );
 
-CREATE TABLE IF NOT EXISTS tmp_uuid (
-  uuid TEXT PRIMARY KEY,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+CREATE TABLE IF NOT EXISTS uploads (
+  uuid TEXT PRIMARY KEY,           
+  owner_id INTEGER NOT NULL REFERENCES users(id),
+  folder_id INTEGER REFERENCES folders(id), 
+  stored_name TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  mime TEXT,
+  size_bytes INTEGER,
+  sha256 TEXT,                   
+  started_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_files_owner ON files(owner_id);
@@ -59,3 +66,5 @@ CREATE INDEX IF NOT EXISTS idx_auth_tokens_expiry ON auth_tokens(expires_at);
 CREATE INDEX IF NOT EXISTS idx_invite_tokens_expiry ON invite_tokens(expires_at);
 CREATE INDEX IF NOT EXISTS idx_files_folder ON files(folder_id);
 CREATE INDEX IF NOT EXISTS idx_folders_parent ON folders(owner_id, parent_id);
+CREATE INDEX IF NOT EXISTS idx_uploads_owner_id ON uploads(owner_id);
+CREATE INDEX IF NOT EXISTS idx_uploads_folder_id ON uploads(folder_id);

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"log"
 	"net/http"
+	"os"
 )
 
 const (
@@ -17,6 +18,9 @@ var DB *sql.DB;
 
 func main() {
 	log.Println("Starting server")
+	
+	log.Println("Ensuring paths")
+	_ = os.MkdirAll(TmpRoot, 0755)
 
 	log.Println("Opening db")
 	var err error
@@ -29,10 +33,10 @@ func main() {
 	if err := runSqlFromFile(DB,"./migrations/dummy.sql"); err != nil { log.Fatal(err) } // dummy data
 
 	log.Println("Setting up handlers")
-	http.HandleFunc("/api/auth",handleAuth)
-	http.HandleFunc("/api/user",handleUser)
-	http.HandleFunc("/api/admin",handleAdmin)
-	http.HandleFunc("/api/file",handleFile)
+	http.Handle("/api/auth", corsMiddleware(http.HandlerFunc(handleAuth)))
+	http.Handle("/api/user", corsMiddleware(http.HandlerFunc(handleUser)))
+	http.Handle("/api/admin", corsMiddleware(http.HandlerFunc(handleAdmin)))
+	http.Handle("/api/file/upload", corsMiddleware(http.HandlerFunc(handleFileUpload)))
 
 	log.Println("Server is up")
 	log.Fatal((http.ListenAndServe(":8000", nil)))
