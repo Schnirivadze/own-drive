@@ -74,7 +74,7 @@ func uploadFile(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 		}
 
 		// create token if the token is unique
-		_, err := db.Exec(`INSERT INTO uploads (uuid, owner_id, folder_id, stored_name, display_name) VALUES (?, ?, ?, ?, ?)`, uuid)
+		_, err := db.Exec(`INSERT INTO uploads (uuid, owner_id, folder_id, stored_name, display_name) VALUES (?, ?, ?, ?, ?)`, uuid, userId, folderId, uuid, header.Filename, "not set", -1)
 		if err != nil {
 			http.Error(w, "create upload failed: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -85,6 +85,7 @@ func uploadFile(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	// Get header values
 	ext := filepath.Ext(header.Filename)
 	storedName := uuid
+	sha256 := r.FormValue("sha256")
 
 	// Write to temp file
 	tmpPath := filepath.Join(TmpRoot, uuid+".part")
@@ -108,12 +109,24 @@ func uploadFile(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	}
 	tmpFile.Close()
 
+	// Check hash
+	if fileSha, err:=calculateFileSha256(tmpPath); sha256 != fileSha || err != nil {
+		if err != nil {
+			http.Error(w, "error geting sha of a file: "+err.Error(), http.StatusInternalServerError)
+			return
+		} else {
+			http.Error(w, "hashes of files do not match", http.StatusForbidden)
+			return
+
+		}
+	}
+
 	// Register file
 	if _, err := db.Exec(`DELETE FROM uploads WHERE uuid=?`, uuid); err != nil {
 		http.Error(w, "deletion of tmp uuid failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if _, err := db.Exec(`INSERT INTO files (uuid, owner_id, folder_id, stored_name, display_name, mime, size_bytes) VALUES (?, ?, ?, ?, ?, ?, ?)`, uuid, userId, folderId, storedName, header.Filename, ext, written); err != nil {
+	if _, err := db.Exec(`INSERT INTO files (uuid, owner_id, folder_id, stored_name, display_name, mime, size_bytes, sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, uuid, userId, folderId, storedName, header.Filename, ext, written, sha256); err != nil {
 		http.Error(w, "registration of file failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -247,6 +260,20 @@ func finishUpload(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check hash
+	tmpPath := filepath.Join(TmpRoot, uuid + ".part")
+	finalPath := filepath.Join(StorageRoot, uuid)
+	if fileSha, err:=calculateFileSha256(tmpPath); sha256 != fileSha || err != nil {
+		if err != nil {
+			http.Error(w, "error geting sha of a file: "+err.Error(), http.StatusInternalServerError)
+			return
+		} else {
+			http.Error(w, "hashes of files do not match", http.StatusForbidden)
+			return
+
+		}
+	}
+
 	// Register file
 	if _, err := db.Exec(`DELETE FROM uploads WHERE uuid=?`, uuid); err != nil {
 		http.Error(w, "deletion of tmp uuid failed: "+err.Error(), http.StatusInternalServerError)
@@ -257,8 +284,6 @@ func finishUpload(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tmpPath := filepath.Join(TmpRoot, uuid + ".part")
-	finalPath := filepath.Join(StorageRoot, uuid)
 
 	// Move temp file to root folder
 	if err := os.Rename(tmpPath, finalPath); err != nil {

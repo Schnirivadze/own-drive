@@ -2,9 +2,12 @@ package main
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"io"
 	"log"
+	"os"
 	"time"
 )
 
@@ -126,4 +129,22 @@ func authenticateUser(db *sql.DB, authToken string) (int, error) {
 	var userId int
 	err := db.QueryRow(`SELECT user_id FROM auth_tokens WHERE token = ?`, authToken).Scan(&userId)
 	return userId, err
+}
+
+func calculateFileSha256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		log.Printf("Error opening %s: %s", path, err.Error())
+		return "", err
+	}
+	defer f.Close()
+
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		log.Printf("Error calculating sha256 of %s: %s", path, err.Error())
+		return "", err
+	}
+
+	sha256 := hex.EncodeToString(h.Sum(nil))
+	return sha256, nil
 }
