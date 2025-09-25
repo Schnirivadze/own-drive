@@ -37,6 +37,7 @@ func main() {
 	http.Handle("/api/user", corsMiddleware(http.HandlerFunc(handleUser)))
 	http.Handle("/api/admin", corsMiddleware(http.HandlerFunc(handleAdmin)))
 	http.Handle("/api/file/upload", corsMiddleware(http.HandlerFunc(handleFileUpload)))
+	http.Handle("/api/file/download", corsMiddleware(http.HandlerFunc(handleFileDownload)))
 
 	log.Println("Server is up")
 	log.Fatal((http.ListenAndServe(":8000", nil)))

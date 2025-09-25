@@ -21,10 +21,9 @@ type InviteToken struct {
 
 func corsMiddleware(next http.Handler) http.Handler {
     return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        w.Header().Set("Access-Control-Allow-Origin", "http://localhost:3000")
-        w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-        w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Upload-Offset")
-        w.Header().Set("Access-Control-Allow-Credentials", "true")
+        w.Header().Set("Access-Control-Allow-Origin", "*")
+        w.Header().Set("Access-Control-Allow-Methods", "*")
+        w.Header().Set("Access-Control-Allow-Headers", "*")
 
         // Preflight request
         if r.Method == "OPTIONS" {
@@ -38,7 +37,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 
 func handleAuth(w http.ResponseWriter, r *http.Request) {
 	// Clean db from expired or invalid tokens
-	err0 := runSqlFromFile(DB, "./migrations/clearTokens.sql")
+	err0 := runSqlFromFile(DB, "./migrations/cleanTokens.sql")
 	if err0 != nil {
 		log.Printf("Couldnt clear tokens: %s", err0.Error())
 	}
@@ -123,7 +122,7 @@ func handleAdmin(w http.ResponseWriter, r *http.Request) {
 	switch action {
 	case "create-invite-token":
 		// Clean db from expired or invalid tokens
-		err0 := runSqlFromFile(DB, "./migrations/clearTokens.sql")
+		err0 := runSqlFromFile(DB, "./migrations/cleanTokens.sql")
 		if err0 != nil {
 			log.Printf("Couldnt clear tokens: %s", err0.Error())
 		}
@@ -185,5 +184,13 @@ func handleFileUpload(w http.ResponseWriter, r *http.Request) {
 	default:
 		log.Printf("File upload handler unknown method: %s\n", r.Method)
 		w.WriteHeader(http.StatusBadRequest)
+	}
+}
+
+func handleFileDownload(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Has("uuid") {
+		downloadFileByUUID(DB, w, r)
+	} else {
+		http.Error(w, "missing uuid", http.StatusBadRequest)
 	}
 }

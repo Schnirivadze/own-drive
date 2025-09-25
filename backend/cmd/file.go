@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -85,7 +88,7 @@ func uploadFile(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	// Get header values
 	ext := filepath.Ext(header.Filename)
 	storedName := uuid
-	sha256 := r.FormValue("sha256")
+	sha256 := strings.ToLower(r.FormValue("sha256"))
 
 	// Write to temp file
 	tmpPath := filepath.Join(TmpRoot, uuid+".part")
@@ -110,7 +113,7 @@ func uploadFile(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	tmpFile.Close()
 
 	// Check hash
-	if fileSha, err:=calculateFileSha256(tmpPath); sha256 != fileSha || err != nil {
+	if fileSha, err := calculateFileSha256(tmpPath); sha256 != fileSha || err != nil {
 		if err != nil {
 			http.Error(w, "error geting sha of a file: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -126,7 +129,7 @@ func uploadFile(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "deletion of tmp uuid failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if _, err := db.Exec(`INSERT INTO files (uuid, owner_id, folder_id, stored_name, display_name, mime, size_bytes, sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, uuid, userId, folderId, storedName, header.Filename, ext, written, sha256); err != nil {
+	if _, err := db.Exec(`INSERT INTO files (uuid, owner_id, folder_id, stored_name, display_name, mime, size_bytes, sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, uuid, userId, folderId, storedName, header.Filename, ext, written, strings.ToLower(sha256)); err != nil {
 		http.Error(w, "registration of file failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -193,7 +196,7 @@ func startUpload(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	f.Close()
 
 	// Register upload
-	if _, err := db.Exec(`INSERT INTO uploads (uuid, owner_id, folder_id, stored_name, display_name, mime, size_bytes, sha256, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, uuid, userId, folderId, tmpPath, upload.Filename, upload.Mime, upload.Size_bytes, upload.Sha256, time.Now().UTC()); err != nil {
+	if _, err := db.Exec(`INSERT INTO uploads (uuid, owner_id, folder_id, stored_name, display_name, mime, size_bytes, sha256, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, uuid, userId, folderId, tmpPath, upload.Filename, upload.Mime, upload.Size_bytes, strings.ToLower(upload.Sha256), time.Now().UTC()); err != nil {
 		http.Error(w, "registration of upload failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -255,15 +258,15 @@ func finishUpload(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	// Get data from uploads
 	var owner_id, folder_id, stored_name, display_name, mime, sha256 string
 	var size_bytes int
-	if err := db.QueryRow(`SELECT owner_id, folder_id, stored_name, display_name, mime, size_bytes, sha256 FROM uploads WHERE uuid=? `, uuid).Scan(&owner_id, &folder_id, &stored_name, &display_name, &mime, &size_bytes, &sha256); err!=nil{
+	if err := db.QueryRow(`SELECT owner_id, folder_id, stored_name, display_name, mime, size_bytes, sha256 FROM uploads WHERE uuid=? `, uuid).Scan(&owner_id, &folder_id, &stored_name, &display_name, &mime, &size_bytes, &sha256); err != nil {
 		http.Error(w, "Couldnt get metadata of upload: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	// Check hash
-	tmpPath := filepath.Join(TmpRoot, uuid + ".part")
+	tmpPath := filepath.Join(TmpRoot, uuid+".part")
 	finalPath := filepath.Join(StorageRoot, uuid)
-	if fileSha, err:=calculateFileSha256(tmpPath); sha256 != fileSha || err != nil {
+	if fileSha, err := calculateFileSha256(tmpPath); sha256 != fileSha || err != nil {
 		if err != nil {
 			http.Error(w, "error geting sha of a file: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -279,11 +282,10 @@ func finishUpload(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "deletion of tmp uuid failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if _, err := db.Exec(`INSERT INTO files (uuid, owner_id, folder_id, stored_name, display_name, mime, size_bytes, sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, uuid, owner_id, folder_id, stored_name, display_name, mime, size_bytes, sha256); err != nil {
+	if _, err := db.Exec(`INSERT INTO files (uuid, owner_id, folder_id, stored_name, display_name, mime, size_bytes, sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, uuid, owner_id, folder_id, finalPath, display_name, mime, size_bytes, sha256); err != nil {
 		http.Error(w, "registration of file failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-
 
 	// Move temp file to root folder
 	if err := os.Rename(tmpPath, finalPath); err != nil {
@@ -292,4 +294,75 @@ func finishUpload(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
+}
+
+func downloadFileByUUID(db *sql.DB, w http.ResponseWriter, r *http.Request) {
+	// Authenticate user
+	authToken := r.URL.Query().Get("auth")
+	userID, err := authenticateUser(db, authToken)
+	if err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Get uuid from url
+	uuid := r.URL.Query().Get("uuid")
+	if uuid == "" {
+		http.Error(w, "missing uuid", http.StatusBadRequest)
+		return
+	}
+
+	// Get file metadata
+	var ownerID int
+	var storedName, displayName, mime, sha256 string
+	var sizeBytes int64
+	row := db.QueryRow(`SELECT owner_id, stored_name, display_name, mime, size_bytes, sha256 FROM files WHERE uuid = ?`, uuid)
+	if err := row.Scan(&ownerID, &storedName, &displayName, &mime, &sizeBytes, &sha256); err != nil {
+		if err == sql.ErrNoRows {
+			http.Error(w, "No such file", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "db error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Check permission
+	if ownerID != userID {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	// Construct full path and check file exists
+	fi, err := os.Stat(storedName)
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Printf("No such file: %s", storedName)
+			http.Error(w, "No such file", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "stat error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Set headers
+	if mime != "" {
+		w.Header().Set("Content-Type", mime)
+	} else {
+		w.Header().Set("Content-Type", "application/octet-stream")
+	}
+
+	// Suggest filename for browser download; sanitize displayName if needed
+	safeName := filepath.Base(displayName)
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename*=UTF-8''%s", url.PathEscape(safeName)))
+
+	// Serve file
+	f, err := os.Open(storedName)
+	if err != nil {
+		http.Error(w, "open error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer f.Close()
+
+	// http.ServeContent uses the provided modtime; we can use fi.ModTime()
+	http.ServeContent(w, r, safeName, fi.ModTime(), f)
 }
