@@ -23,8 +23,6 @@ type UploadReq struct {
 	Sha256     string `json:"sha256"`
 }
 
-var TmpRoot = filepath.Join(StorageRoot, "_tmp")
-
 func sanitizePath(p string) string {
 	c := filepath.Clean("/" + p)
 	if c == "/" {
@@ -61,6 +59,12 @@ func uploadFile(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
+	// Get header values
+	sha256 := strings.ToLower(r.FormValue("sha256"))
+	mime := r.FormValue("mime")
+	var filePath string
+	var fileTempPath string
+
 	// Generate uuid
 	var uuid string
 	for {
@@ -69,30 +73,24 @@ func uploadFile(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 
 		// check if token already exists
 		var uuidExists bool
-		var uuidExistsTmp bool
 		db.QueryRow("SELECT EXISTS(SELECT 1 FROM files WHERE uuid=?)", uuid).Scan(&uuidExists)
-		db.QueryRow("SELECT EXISTS(SELECT 1 FROM uploads WHERE uuid=?)", uuid).Scan(&uuidExistsTmp)
-		if uuidExists || uuidExistsTmp {
+		if uuidExists {
 			continue
 		}
 
 		// create token if the token is unique
-		_, err := db.Exec(`INSERT INTO uploads (uuid, owner_id, folder_id, stored_name, display_name) VALUES (?, ?, ?, ?, ?)`, uuid, userId, folderId, uuid, header.Filename, "not set", -1)
-		if err != nil {
-			http.Error(w, "create upload failed: "+err.Error(), http.StatusInternalServerError)
+		filePath = filepath.Join(StorageRoot, uuid)
+		fileTempPath = filepath.Join(filePath, ".part")
+		if _, err := db.Exec(`INSERT INTO files (uuid, owner_id, folder_id, stored_name, display_name, mime, size_bytes, size_bytes_on_disk, sha256, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			uuid, userId, folderId, fileTempPath, header.Filename, mime, header.Size, 0, sha256, time.Now().UTC()); err != nil {
+			http.Error(w, "register file failed: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 		break
 	}
 
-	// Get header values
-	ext := filepath.Ext(header.Filename)
-	storedName := uuid
-	sha256 := strings.ToLower(r.FormValue("sha256"))
-
 	// Write to temp file
-	tmpPath := filepath.Join(TmpRoot, uuid+".part")
-	tmpFile, err := os.Create(tmpPath)
+	tmpFile, err := os.Create(fileTempPath)
 	if err != nil {
 		http.Error(w, "create tmp file failed: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -100,45 +98,39 @@ func uploadFile(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	written, err := io.Copy(tmpFile, file)
 	if err != nil {
 		tmpFile.Close()
-		os.Remove(tmpPath)
+		os.Remove(fileTempPath)
 		http.Error(w, "write failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	if err := tmpFile.Sync(); err != nil {
 		tmpFile.Close()
-		os.Remove(tmpPath)
+		os.Remove(fileTempPath)
 		http.Error(w, "sync failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	tmpFile.Close()
 
 	// Check hash
-	if fileSha, err := calculateFileSha256(tmpPath); sha256 != fileSha || err != nil {
+	if fileSha, err := calculateFileSha256(fileTempPath); sha256 != fileSha || err != nil {
 		if err != nil {
 			http.Error(w, "error geting sha of a file: "+err.Error(), http.StatusInternalServerError)
 			return
 		} else {
 			http.Error(w, "hashes of files do not match", http.StatusForbidden)
 			return
-
 		}
 	}
 
-	// Register file
-	if _, err := db.Exec(`DELETE FROM uploads WHERE uuid=?`, uuid); err != nil {
-		http.Error(w, "deletion of tmp uuid failed: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if _, err := db.Exec(`INSERT INTO files (uuid, owner_id, folder_id, stored_name, display_name, mime, size_bytes, sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, uuid, userId, folderId, storedName, header.Filename, ext, written, strings.ToLower(sha256)); err != nil {
-		http.Error(w, "registration of file failed: "+err.Error(), http.StatusInternalServerError)
+	// Remove .part extention
+	if err := os.Rename(fileTempPath, filePath); err != nil {
+		os.Remove(fileTempPath)
+		http.Error(w, "rename failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// Move to files folder
-	finalPath := filepath.Join(StorageRoot, storedName)
-	if err := os.Rename(tmpPath, finalPath); err != nil {
-		os.Remove(tmpPath)
-		http.Error(w, "rename failed: "+err.Error(), http.StatusInternalServerError)
+	// Register file
+	if _, err := db.Exec(`UPDATE files SET size_bytes_on_disk = ?, stored_name = ? WHERE uuid = ?`, written, filePath, uuid); err != nil {
+		http.Error(w, "registration of file failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -178,7 +170,6 @@ func startUpload(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 		var uuidExists bool
 		var uuidExistsTmp bool
 		db.QueryRow("SELECT EXISTS(SELECT 1 FROM files WHERE uuid=?)", uuid).Scan(&uuidExists)
-		db.QueryRow("SELECT EXISTS(SELECT 1 FROM uploads WHERE uuid=?)", uuid).Scan(&uuidExistsTmp)
 		if uuidExists || uuidExistsTmp {
 			continue
 		}
@@ -187,7 +178,7 @@ func startUpload(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create empty temp file
-	tmpPath := filepath.Join(TmpRoot, uuid+".part")
+	tmpPath := filepath.Join(StorageRoot, uuid+".part")
 	f, err := os.Create(tmpPath)
 	if err != nil {
 		http.Error(w, "create tmp failed: "+err.Error(), http.StatusInternalServerError)
@@ -195,9 +186,9 @@ func startUpload(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	}
 	f.Close()
 
-	// Register upload
-	if _, err := db.Exec(`INSERT INTO uploads (uuid, owner_id, folder_id, stored_name, display_name, mime, size_bytes, sha256, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, uuid, userId, folderId, tmpPath, upload.Filename, upload.Mime, upload.Size_bytes, strings.ToLower(upload.Sha256), time.Now().UTC()); err != nil {
-		http.Error(w, "registration of upload failed: "+err.Error(), http.StatusInternalServerError)
+	// Register file
+	if _, err := db.Exec(`INSERT INTO files (uuid, owner_id, folder_id, stored_name, display_name, mime, size_bytes, size_bytes_on_disk, sha256, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, uuid, userId, folderId, tmpPath, upload.Filename, upload.Mime, upload.Size_bytes, 0, strings.ToLower(upload.Sha256), time.Now().UTC()); err != nil {
+		http.Error(w, "registration of file failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -209,15 +200,23 @@ func startUpload(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 func uploadChunk(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	uuid := r.Header.Get("Authorization")
 	var uuidExists bool
-	db.QueryRow("SELECT EXISTS(SELECT 1 FROM uploads WHERE uuid=?)", uuid).Scan(&uuidExists)
+	db.QueryRow("SELECT EXISTS(SELECT 1 FROM files WHERE uuid=?)", uuid).Scan(&uuidExists)
 	if !uuidExists {
 		http.Error(w, "Invalid UUID", http.StatusInternalServerError)
 		return
 	}
 
+	// Check size
+	var expected, onDisk int64
+	db.QueryRow(`SELECT size_bytes, size_bytes_on_disk FROM files WHERE uuid = ?`, uuid).Scan(&expected, &onDisk)
+	if expected == onDisk {
+		http.Error(w, "file was uploaded completely", http.StatusInternalServerError)
+		return
+	}
+
 	offsetStr := r.URL.Query().Get("offset")
 	offset, _ := strconv.ParseInt(offsetStr, 10, 64)
-	tmpPath := filepath.Join(TmpRoot, uuid+".part")
+	tmpPath := filepath.Join(StorageRoot, uuid+".part")
 
 	// Open file
 	f, err := os.OpenFile(tmpPath, os.O_WRONLY, 0644)
@@ -234,7 +233,8 @@ func uploadChunk(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Copy body
-	if _, err := io.Copy(f, r.Body); err != nil {
+	written, err := io.Copy(f, r.Body)
+	if err != nil {
 		http.Error(w, "write failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -243,47 +243,57 @@ func uploadChunk(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Update db
+	newSize := offset + written
+	if _, err := db.Exec(`UPDATE files SET size_bytes_on_disk = ? WHERE uuid = ?`, newSize, uuid); err != nil {
+		http.Error(w, "db update failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	w.WriteHeader(http.StatusOK)
 }
 
 func finishUpload(db *sql.DB, w http.ResponseWriter, r *http.Request) {
+	// Check uuid
 	uuid := r.Header.Get("Authorization")
 	var uuidExists bool
-	db.QueryRow("SELECT EXISTS(SELECT 1 FROM uploads WHERE uuid=?)", uuid).Scan(&uuidExists)
+	db.QueryRow("SELECT EXISTS(SELECT 1 FROM files WHERE uuid=?)", uuid).Scan(&uuidExists)
 	if !uuidExists {
 		http.Error(w, "Invalid UUID", http.StatusInternalServerError)
 		return
 	}
 
-	// Get data from uploads
-	var owner_id, folder_id, stored_name, display_name, mime, sha256 string
-	var size_bytes int
-	if err := db.QueryRow(`SELECT owner_id, folder_id, stored_name, display_name, mime, size_bytes, sha256 FROM uploads WHERE uuid=? `, uuid).Scan(&owner_id, &folder_id, &stored_name, &display_name, &mime, &size_bytes, &sha256); err != nil {
-		http.Error(w, "Couldnt get metadata of upload: "+err.Error(), http.StatusInternalServerError)
+	// Check size
+	var expected, onDisk int64
+	db.QueryRow(`SELECT size_bytes, size_bytes_on_disk FROM files WHERE uuid = ?`, uuid).Scan(&expected, &onDisk)
+	if expected != onDisk {
+		http.Error(w, "file wasnt uploaded completely", http.StatusInternalServerError)
+		return
+	}
+
+	// Get hash
+	var sha256 string
+	if err := db.QueryRow(`SELECT sha256 FROM files WHERE uuid=? `, uuid).Scan(&sha256); err != nil {
+		http.Error(w, "Couldnt get hash of uploaded file: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	// Check hash
-	tmpPath := filepath.Join(TmpRoot, uuid+".part")
+	tmpPath := filepath.Join(StorageRoot, uuid+".part")
 	finalPath := filepath.Join(StorageRoot, uuid)
 	if fileSha, err := calculateFileSha256(tmpPath); sha256 != fileSha || err != nil {
 		if err != nil {
-			http.Error(w, "error geting sha of a file: "+err.Error(), http.StatusInternalServerError)
+			http.Error(w, "error geting hash of a file: "+err.Error(), http.StatusInternalServerError)
 			return
 		} else {
 			http.Error(w, "hashes of files do not match", http.StatusForbidden)
 			return
-
 		}
 	}
 
-	// Register file
-	if _, err := db.Exec(`DELETE FROM uploads WHERE uuid=?`, uuid); err != nil {
-		http.Error(w, "deletion of tmp uuid failed: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if _, err := db.Exec(`INSERT INTO files (uuid, owner_id, folder_id, stored_name, display_name, mime, size_bytes, sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, uuid, owner_id, folder_id, finalPath, display_name, mime, size_bytes, sha256); err != nil {
-		http.Error(w, "registration of file failed: "+err.Error(), http.StatusInternalServerError)
+	// Update path
+	if _, err := db.Exec(`UPDATE files SET stored_name = ? WHERE uuid = ?`, finalPath, uuid); err != nil {
+		http.Error(w, "db update failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 

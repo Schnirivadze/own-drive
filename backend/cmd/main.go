@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"log"
 	"net/http"
-	"os"
 )
 
 const (
@@ -18,9 +17,6 @@ var DB *sql.DB;
 
 func main() {
 	log.Println("Starting server")
-	
-	log.Println("Ensuring paths")
-	_ = os.MkdirAll(TmpRoot, 0755)
 
 	log.Println("Opening db")
 	var err error
