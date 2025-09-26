@@ -1,9 +1,11 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"log"
 	"net/http"
+	"time"
 )
 
 type LoginReq struct {
@@ -19,20 +21,30 @@ type InviteToken struct {
 	Token string `json:"token"`
 }
 
+type FileJSONWrapper struct {
+	UUID        string    `json:"uuid"`
+	FolderID    *int64    `json:"folder_id,omitempty"`
+	DisplayName string    `json:"display_name"`
+	Mime        *string   `json:"mime,omitempty"`
+	SizeBytes   *int64    `json:"size_bytes,omitempty"`
+	Sha256      *string   `json:"sha256,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
 func corsMiddleware(next http.Handler) http.Handler {
-    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        w.Header().Set("Access-Control-Allow-Origin", "*")
-        w.Header().Set("Access-Control-Allow-Methods", "*")
-        w.Header().Set("Access-Control-Allow-Headers", "*")
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "*")
+		w.Header().Set("Access-Control-Allow-Headers", "*")
 
-        // Preflight request
-        if r.Method == "OPTIONS" {
-            w.WriteHeader(http.StatusOK)
-            return
-        }
+		// Preflight request
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 
-        next.ServeHTTP(w, r)
-    })
+		next.ServeHTTP(w, r)
+	})
 }
 
 func handleAuth(w http.ResponseWriter, r *http.Request) {
@@ -168,7 +180,7 @@ func handleAdmin(w http.ResponseWriter, r *http.Request) {
 func handleFileUpload(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPost:
-		switch r.URL.Query().Get("action"){
+		switch r.URL.Query().Get("action") {
 		case "single":
 			uploadFile(DB, w, r)
 		case "start":
@@ -180,7 +192,7 @@ func handleFileUpload(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusBadRequest)
 		}
 	case http.MethodPut:
-		uploadChunk(DB,w,r)
+		uploadChunk(DB, w, r)
 	default:
 		log.Printf("File upload handler unknown method: %s\n", r.Method)
 		w.WriteHeader(http.StatusBadRequest)
@@ -193,4 +205,92 @@ func handleFileDownload(w http.ResponseWriter, r *http.Request) {
 	} else {
 		http.Error(w, "missing uuid", http.StatusBadRequest)
 	}
+}
+
+func handleFileList(w http.ResponseWriter, r *http.Request) {
+	// Authenticate auth token
+	userId, errAuth := authenticateUser(DB, r.Header.Get("Authorization"))
+	if errAuth != nil {
+		http.Error(w, "Unauthorized: "+errAuth.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	// Get folder id
+	path := r.URL.Query().Get("path")
+	folderId, errFolderId := getFolderIdFromPath(DB, path, userId)
+	if errFolderId != nil {
+		http.Error(w, errFolderId.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Get folder contents
+	rows, err := DB.Query(`
+			SELECT uuid, folder_id, display_name, mime, size_bytes, sha256, created_at
+			FROM files
+			WHERE owner_id = ? AND folder_id = ? AND deleted_at IS NULL
+		`, userId, folderId)
+
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	// Turn sql rows into structs
+	files := make([]FileJSONWrapper, 0)
+	for rows.Next() {
+		var f FileJSONWrapper
+		var (
+			dbFolderID  sql.NullInt64
+			dbMime      sql.NullString
+			dbSizeBytes sql.NullInt64
+			dbSha256    sql.NullString
+		)
+
+		if err := rows.Scan(
+			&f.UUID,
+			&dbFolderID,
+			&f.DisplayName,
+			&dbMime,
+			&dbSizeBytes,
+			&dbSha256,
+			&f.CreatedAt,
+		); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// Map nullable columns into pointer fields
+		if dbFolderID.Valid {
+			f.FolderID = &dbFolderID.Int64
+		} else {
+			f.FolderID = nil
+		}
+		if dbMime.Valid {
+			f.Mime = &dbMime.String
+		}
+		if dbSizeBytes.Valid {
+			f.SizeBytes = &dbSizeBytes.Int64
+		}
+		if dbSha256.Valid {
+			f.Sha256 = &dbSha256.String
+		}
+		files = append(files, f)
+	}
+	if err := rows.Err(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Marshal to JSON
+	out, err := json.Marshal(files)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Send json list
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(out)
 }
