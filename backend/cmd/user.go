@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"errors"
 	"log"
 )
 
@@ -37,7 +38,7 @@ func createUser(db *sql.DB, inviteToken string, username, password string) error
 	}
 
 	// Create root folder
-	if _, errCreateFolder := db.Exec(`INSERT INTO folders (owner_id, name) values (?, ?)`, userId, "~"); errCreateFolder!=nil{
+	if _, errCreateFolder := db.Exec(`INSERT INTO folders (owner_id, name) values (?, ?)`, userId, "~"); errCreateFolder != nil {
 		log.Println("Couldnt create users root folder")
 		return errCreateFolder
 	}
@@ -101,4 +102,38 @@ func updateUser(db *sql.DB, authToken, username, password string) error {
 	// Deauth user
 	err := deleteAuthToken(db, authToken)
 	return err
+}
+
+func reserveQuota(db *sql.DB, userID int, size int64) error {
+	res, err := db.Exec(`
+        UPDATE users
+        SET used_bytes = used_bytes + ?
+        WHERE id = ? AND (used_bytes + ?) <= quota_bytes
+    `, size, userID, size)
+	if err != nil {
+		return errors.New("reserveQuota db error: " + err.Error())
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return errors.New("reserveQuota rows affected error: " + err.Error())
+	}
+	if rows == 0 {
+		return errors.New("quota exceeded")
+	}
+	return nil
+}
+
+func releaseQuota(db *sql.DB, userID int, size int64) error {
+	_, err := db.Exec(`
+        UPDATE users
+        SET used_bytes = CASE
+            WHEN used_bytes >= ? THEN used_bytes - ?
+            ELSE 0
+        END
+        WHERE id = ?
+    `, size, size, userID)
+	if err != nil {
+		return errors.New("releaseQuota db error: " + err.Error())
+	}
+	return nil
 }

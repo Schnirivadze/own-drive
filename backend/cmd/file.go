@@ -59,6 +59,12 @@ func uploadFile(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
+	// Reserve space in db
+	if err := reserveQuota(db, userId, header.Size); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	// Get header values
 	sha256 := strings.ToLower(r.FormValue("sha256"))
 	mime := r.FormValue("mime")
@@ -93,6 +99,7 @@ func uploadFile(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	tmpFile, err := os.Create(fileTempPath)
 	if err != nil {
 		http.Error(w, "create tmp file failed: "+err.Error(), http.StatusInternalServerError)
+		releaseQuota(db, userId, header.Size)
 		return
 	}
 	written, err := io.Copy(tmpFile, file)
@@ -100,12 +107,14 @@ func uploadFile(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 		tmpFile.Close()
 		os.Remove(fileTempPath)
 		http.Error(w, "write failed: "+err.Error(), http.StatusInternalServerError)
+		releaseQuota(db, userId, written)
 		return
 	}
 	if err := tmpFile.Sync(); err != nil {
 		tmpFile.Close()
 		os.Remove(fileTempPath)
 		http.Error(w, "sync failed: "+err.Error(), http.StatusInternalServerError)
+		releaseQuota(db, userId, written)
 		return
 	}
 	tmpFile.Close()
@@ -114,9 +123,11 @@ func uploadFile(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	if fileSha, err := calculateFileSha256(fileTempPath); sha256 != fileSha || err != nil {
 		if err != nil {
 			http.Error(w, "error geting sha of a file: "+err.Error(), http.StatusInternalServerError)
+			releaseQuota(db, userId, written)
 			return
 		} else {
 			http.Error(w, "hashes of files do not match", http.StatusForbidden)
+			releaseQuota(db, userId, written)
 			return
 		}
 	}
@@ -125,12 +136,14 @@ func uploadFile(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	if err := os.Rename(fileTempPath, filePath); err != nil {
 		os.Remove(fileTempPath)
 		http.Error(w, "rename failed: "+err.Error(), http.StatusInternalServerError)
+		releaseQuota(db, userId, written)
 		return
 	}
 
 	// Register file
 	if _, err := db.Exec(`UPDATE files SET size_bytes_on_disk = ?, stored_name = ? WHERE uuid = ?`, written, filePath, uuid); err != nil {
 		http.Error(w, "registration of file failed: "+err.Error(), http.StatusInternalServerError)
+		releaseQuota(db, userId, written)
 		return
 	}
 
@@ -157,6 +170,12 @@ func startUpload(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	var folderId int
 	if err := db.QueryRow(`SELECT id FROM folders WHERE owner_id=? AND name=?`, userId, upload.Path).Scan(&folderId); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	// Reserve space in db
+	if err := reserveQuota(db, userId, upload.Size_bytes); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -255,11 +274,24 @@ func uploadChunk(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 
 func finishUpload(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	// Check uuid
-	uuid := r.Header.Get("Authorization")
+	uuid := r.URL.Query().Get("uuid")
 	var uuidExists bool
 	db.QueryRow("SELECT EXISTS(SELECT 1 FROM files WHERE uuid=?)", uuid).Scan(&uuidExists)
 	if !uuidExists {
 		http.Error(w, "Invalid UUID", http.StatusInternalServerError)
+		return
+	}
+
+	// Check ownership
+	userId, errAuth := authenticateUser(db, r.Header.Get("Authorization"))
+	if errAuth != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	var userOwnsFile bool
+	db.QueryRow("SELECT EXISTS(SELECT 1 FROM files WHERE uuid=? AND owner_id=?)", uuid, userId).Scan(&userOwnsFile)
+	if !userOwnsFile {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
 
@@ -275,6 +307,7 @@ func finishUpload(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	var sha256 string
 	if err := db.QueryRow(`SELECT sha256 FROM files WHERE uuid=? `, uuid).Scan(&sha256); err != nil {
 		http.Error(w, "Couldnt get hash of uploaded file: "+err.Error(), http.StatusInternalServerError)
+		releaseQuota(db, userId, onDisk)
 		return
 	}
 
@@ -287,6 +320,7 @@ func finishUpload(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 			return
 		} else {
 			http.Error(w, "hashes of files do not match", http.StatusForbidden)
+			releaseQuota(db, userId, onDisk)
 			return
 		}
 	}
@@ -294,12 +328,14 @@ func finishUpload(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	// Update path
 	if _, err := db.Exec(`UPDATE files SET stored_name = ? WHERE uuid = ?`, finalPath, uuid); err != nil {
 		http.Error(w, "db update failed: "+err.Error(), http.StatusInternalServerError)
+		releaseQuota(db, userId, onDisk)
 		return
 	}
 
 	// Move temp file to root folder
 	if err := os.Rename(tmpPath, finalPath); err != nil {
 		http.Error(w, "rename failed: "+err.Error(), http.StatusInternalServerError)
+		releaseQuota(db, userId, onDisk)
 		return
 	}
 
