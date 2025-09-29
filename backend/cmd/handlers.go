@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
 	"time"
 )
 
@@ -293,4 +294,55 @@ func handleFileList(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write(out)
+}
+
+func handleFileDelete(w http.ResponseWriter, r *http.Request) {
+	// Authenticate auth token
+	userId, errAuth := authenticateUser(DB, r.Header.Get("Authorization"))
+	if errAuth != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Get uuid
+	uuid := r.URL.Query().Get("uuid")
+	var uuidExists bool
+	if err := DB.QueryRow("SELECT EXISTS(SELECT 1 FROM files WHERE uuid=?)", uuid).Scan(&uuidExists); err != nil {
+		http.Error(w, "uuid does not exist", http.StatusBadRequest)
+		return
+	}
+
+	// Check ownership
+	var userOwnsFile bool
+	DB.QueryRow("SELECT EXISTS(SELECT 1 FROM files WHERE uuid=? AND owner_id=?)", uuid, userId).Scan(&userOwnsFile)
+	if !userOwnsFile {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Get path and size
+	var filePath string
+	var fileSize int64
+	if err := DB.QueryRow(`SELECT stored_name, size_bytes_on_disk FROM files WHERE uuid=?`, uuid).Scan(&filePath, &fileSize); err != nil {
+		http.Error(w, "file path and size query failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Delete file
+	if err := os.Remove(filePath); err != nil {
+		http.Error(w, "deletion failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Update db
+	if err := releaseQuota(DB, userId, fileSize); err != nil {
+		http.Error(w, "updating users quota failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if _, err := DB.Exec(`DELETE FROM files WHERE uuid=?`, uuid); err != nil {
+		http.Error(w, "updating files failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
 }

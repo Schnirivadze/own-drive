@@ -35,6 +35,7 @@ func main() {
 	http.Handle("/api/file/upload", corsMiddleware(http.HandlerFunc(handleFileUpload)))
 	http.Handle("/api/file/download", corsMiddleware(http.HandlerFunc(handleFileDownload)))
 	http.Handle("/api/file/list", corsMiddleware(http.HandlerFunc(handleFileList)))
+	http.Handle("/api/file/delete", corsMiddleware(http.HandlerFunc(handleFileDelete)))
 
 	log.Println("Server is up")
 	log.Fatal((http.ListenAndServe(":8000", nil)))
