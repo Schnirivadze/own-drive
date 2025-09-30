@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
-	"os"
 	"time"
 )
 
@@ -296,6 +295,37 @@ func handleFileList(w http.ResponseWriter, r *http.Request) {
 	w.Write(out)
 }
 
+func handleFileFolder(w http.ResponseWriter, r *http.Request) {
+	// Authenticate auth token
+	userId, errAuth := authenticateUser(DB, r.Header.Get("Authorization"))
+	if errAuth != nil {
+		http.Error(w, "Unauthorized: "+errAuth.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodPost:
+		if err := createFolder(DB, r.URL.Query().Get("path"), userId); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	case http.MethodDelete:
+		if err := deleteFolder(DB, r.URL.Query().Get("path"), userId); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	case http.MethodPatch:
+		if err := renameFolder(DB, r.URL.Query().Get("path"), r.URL.Query().Get("name"), userId); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+	default:
+		http.Error(w, "unsupported method", http.StatusBadRequest)
+		return
+	}
+}
+
 func handleFileDelete(w http.ResponseWriter, r *http.Request) {
 	// Authenticate auth token
 	userId, errAuth := authenticateUser(DB, r.Header.Get("Authorization"))
@@ -320,27 +350,9 @@ func handleFileDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get path and size
-	var filePath string
-	var fileSize int64
-	if err := DB.QueryRow(`SELECT stored_name, size_bytes_on_disk FROM files WHERE uuid=?`, uuid).Scan(&filePath, &fileSize); err != nil {
-		http.Error(w, "file path and size query failed: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
 	// Delete file
-	if err := os.Remove(filePath); err != nil {
-		http.Error(w, "deletion failed: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// Update db
-	if err := releaseQuota(DB, userId, fileSize); err != nil {
-		http.Error(w, "updating users quota failed: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if _, err := DB.Exec(`DELETE FROM files WHERE uuid=?`, uuid); err != nil {
-		http.Error(w, "updating files failed: "+err.Error(), http.StatusInternalServerError)
+	if err := deleteFile(DB, uuid, userId); err!=nil{
+		http.Error(w,err.Error(),http.StatusInternalServerError)
 		return
 	}
 

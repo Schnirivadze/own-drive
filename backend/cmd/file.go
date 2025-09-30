@@ -412,3 +412,29 @@ func downloadFileByUUID(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	// http.ServeContent uses the provided modtime; we can use fi.ModTime()
 	http.ServeContent(w, r, safeName, fi.ModTime(), f)
 }
+
+func deleteFile(db *sql.DB, uuid string, userId int) error {
+	// Get file size and path
+	var fileSize int64
+	var storedName string
+	if err := db.QueryRow(`SELECT size_bytes_on_disk, stored_name FROM files WHERE uuid=?`, uuid).Scan(&fileSize, &storedName); err != nil {
+		return err
+	}
+
+	// Remove file from db
+	if _, err := db.Exec(`DELETE FROM files WHERE uuid=?`, uuid, userId); err != nil {
+		return err
+	}
+
+	// Update users space usage
+	if err := releaseQuota(db, userId, fileSize); err != nil {
+		return err
+	}
+
+	// Remove file from disk
+	if err := os.Remove(storedName); err != nil {
+		return err
+	}
+
+	return nil
+}
