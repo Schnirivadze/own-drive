@@ -8,18 +8,13 @@ import (
 
 func openDB(path string) (*sql.DB, error) {
 
-	dsn := "file:" + DBPath + "?_busy_timeout=5000&_foreign_keys=1"
+	dsn := "file:" + path + "?_busy_timeout=5000&_foreign_keys=1"
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
 	return db, nil
-}
-
-func runSql(db *sql.DB, sqlText string) error {
-	_, err := db.Exec(sqlText)
-	return err
 }
 
 func runSqlFromFile(db *sql.DB, path string) error {

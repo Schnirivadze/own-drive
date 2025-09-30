@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"errors"
+	"log"
 	"strings"
 )
 
@@ -77,7 +78,7 @@ func deleteFolder(db *sql.DB, folderPath string, ownerId int) error {
 
 func deleteFolderContents(db *sql.DB, folderId, ownerId int) error {
 	// Get files in the folder
-	fileRows, errFilesQuery := DB.Query(`SELECT uuid FROM files WHERE folder_id=?`, folderId)
+	fileRows, errFilesQuery := db.Query(`SELECT uuid FROM files WHERE folder_id=?`, folderId)
 	if errFilesQuery != nil {
 		return errFilesQuery
 	}
@@ -89,13 +90,13 @@ func deleteFolderContents(db *sql.DB, folderId, ownerId int) error {
 		if err := fileRows.Scan(&uuid); err != nil {
 			return err
 		}
-		if err := deleteFile(db, uuid, ownerId); err != nil {
+		if err := deleteFile(db, ownerId, uuid); err != nil {
 			return err
 		}
 	}
 
 	// Get child folders
-	folderRows, errFolderQuery := DB.Query(`SELECT folder_id FROM folders WHERE parent_id=?`, folderId)
+	folderRows, errFolderQuery := db.Query(`SELECT folder_id FROM folders WHERE parent_id=?`, folderId)
 	if errFolderQuery != nil {
 		return errFolderQuery
 	}
@@ -118,4 +119,76 @@ func deleteFolderContents(db *sql.DB, folderId, ownerId int) error {
 	}
 
 	return nil
+}
+
+func listFolderContents(db *sql.DB, folderPath string, ownerId int) (FolderContents, error) {
+	var contents FolderContents
+
+	// Get folder id
+	folderId, errFolderId := getFolderIdFromPath(DB, folderPath, ownerId)
+	if errFolderId != nil {
+		log.Printf("Couldnt get folder id: %s", errFolderId.Error())
+		return contents, errFolderId
+	}
+
+	// Get files in the folder
+	fileRows, errFileQuery := db.Query(`SELECT uuid, display_name, mime, size_bytes, sha256, created_at FROM files WHERE owner_id = ? AND folder_id = ? AND deleted_at IS NULL`, ownerId, folderId)
+
+	if errFileQuery != nil && errFileQuery != sql.ErrNoRows {
+		log.Printf("Couldnt get file rows: %s", errFileQuery.Error())
+		return contents, errFileQuery
+	}
+	defer fileRows.Close()
+
+	// Turn sql rows into structs
+	files := make([]FileWrapper, 0)
+	for fileRows.Next() {
+		var f FileWrapper
+		var (
+			dbMime sql.NullString
+		)
+
+		if err := fileRows.Scan(&f.UUID, &f.DisplayName, &dbMime, &f.SizeBytes, &f.Sha256, &f.CreatedAt); err != nil {
+			log.Printf("Couldnt scan file rows: %s", err.Error())
+			return contents, err
+		}
+
+		if dbMime.Valid {
+			f.Mime = &dbMime.String
+		}
+
+		files = append(files, f)
+	}
+	if err := fileRows.Err(); err != nil {
+		log.Printf("Couldnt iterate file rows: %s", err.Error())
+		return contents, err
+	}
+
+	// Get files in the folder
+	folderRows, errFolderQuery := db.Query(`SELECT name, created_at FROM folders WHERE owner_id = ? AND parent_id = ?`, ownerId, folderId)
+
+	if errFolderQuery != nil && errFolderQuery != sql.ErrNoRows {
+		log.Printf("Couldnt get folder rows: %s", errFolderQuery.Error())
+		return contents, errFolderQuery
+	}
+	defer fileRows.Close()
+
+	// Turn sql rows into structs
+	folders := make([]FolderWrapper, 0)
+	for folderRows.Next() {
+		var f FolderWrapper
+		if err := fileRows.Scan(&f.Name, &f.CreatedAt); err != nil {
+			log.Printf("Couldnt scan folder rows: %s", err.Error())
+			return contents, err
+		}
+		folders = append(folders, f)
+	}
+	if err := folderRows.Err(); err != nil {
+		log.Printf("Couldnt iterate folder rows: %s", err.Error())
+		return contents, err
+	}
+
+	contents.Folders = folders
+	contents.Files = files
+	return contents, nil
 }

@@ -46,8 +46,8 @@ func createInviteToken(db *sql.DB) (string, error) {
 	return token, err
 }
 
-func deleteInviteToken(db *sql.DB, inviteToken string) error{
-	_, err :=db.Exec(`DELETE FROM invite_tokens WHERE token=?`,inviteToken)
+func deleteInviteToken(db *sql.DB, inviteToken string) error {
+	_, err := db.Exec(`DELETE FROM invite_tokens WHERE token=?`, inviteToken)
 	return err
 }
 
@@ -100,11 +100,6 @@ func createAuthToken(db *sql.DB, userId int) (string, string, error) {
 	}
 
 	return token, expiresAt.String(), nil
-}
-
-func deleteAuthToken(db *sql.DB, authToken string) error{
-	_, err := db.Exec(`DELETE FROM auth_tokens WHERE token=?`,authToken)
-	return err
 }
 
 func authenticateAdmin(db *sql.DB, authToken string) (bool, error) {

@@ -61,14 +61,7 @@ func deleteUser(db *sql.DB, authToken string) error {
 	return err
 }
 
-func updateUser(db *sql.DB, authToken, username, password string) error {
-	// Authenticate auth token
-	userId, errAuth := authenticateUser(db, authToken)
-	if errAuth != nil {
-		log.Println("Invalid auth token")
-		return errAuth
-	}
-
+func updateUser(db *sql.DB, userId int, username, password string) error {
 	// Update username
 	var oldUsername string
 	errUsername := db.QueryRow("SELECT username FROM users WHERE id=?", userId).Scan(&oldUsername)
@@ -99,9 +92,7 @@ func updateUser(db *sql.DB, authToken, username, password string) error {
 		}
 	}
 
-	// Deauth user
-	err := deleteAuthToken(db, authToken)
-	return err
+	return nil
 }
 
 func reserveQuota(db *sql.DB, userID int, size int64) error {

@@ -29,14 +29,17 @@ func main() {
 	if err := runSqlFromFile(DB,"./migrations/dummy.sql"); err != nil { log.Fatal(err) } // dummy data
 
 	log.Println("Setting up handlers")
-	http.Handle("/api/auth", corsMiddleware(http.HandlerFunc(handleAuth)))
-	http.Handle("/api/user", corsMiddleware(http.HandlerFunc(handleUser)))
-	http.Handle("/api/admin", corsMiddleware(http.HandlerFunc(handleAdmin)))
-	http.Handle("/api/file/upload", corsMiddleware(http.HandlerFunc(handleFileUpload)))
-	http.Handle("/api/file/download", corsMiddleware(http.HandlerFunc(handleFileDownload)))
-	http.Handle("/api/file/list", corsMiddleware(http.HandlerFunc(handleFileList)))
-	http.Handle("/api/file/folder", corsMiddleware(http.HandlerFunc(handleFileFolder)))
-	http.Handle("/api/file/delete", corsMiddleware(http.HandlerFunc(handleFileDelete)))
+	// Users
+	http.Handle("/api/users/login", corsMiddleware(http.HandlerFunc(handleAuth))) 				// POST
+	http.Handle("/api/users/register", corsMiddleware(http.HandlerFunc(handleRegister))) 		// POST
+	http.Handle("/api/users/me", corsMiddleware(http.HandlerFunc(handleUser))) 					// GET PATCH DELETE
+	// Admin
+	http.Handle("/api/admin/invites", corsMiddleware(http.HandlerFunc(handleInvites)))			// GET POST
+	// Storage
+	http.Handle("/api/storage/upload", corsMiddleware(http.HandlerFunc(handleUploads)))			// POST
+	http.Handle("/api/storage/uploads/", corsMiddleware(http.HandlerFunc(handleUploadProcess)))	// PUT POST
+	http.Handle("/api/storage/file/", corsMiddleware(http.HandlerFunc(handleFile)))				// GET PATCH DELETE
+	http.Handle("/api/storage/files/", corsMiddleware(http.HandlerFunc(handleFiles)))			// GET POST PATCH DELETE
 
 	log.Println("Server is up")
 	log.Fatal((http.ListenAndServe(":8000", nil)))
